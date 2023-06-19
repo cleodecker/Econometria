@@ -1,0 +1,359 @@
+---
+title: "Avaliação Bônus"
+author: "Cleo Decker Anacleto"
+date: "`r Sys.Date()`"
+output:
+  word_document: 
+    toc: yes
+  pdf_document:
+    toc: yes
+  html_document: 
+    highlight: zenburn
+    theme: paper
+    number_sections: yes
+    toc: yes
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+    fig_caption: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Instruções
+
+## Questão 1
+
+Elabore um texto dissertativo sobre o Modelo da Regra de Taylor que contemple o Working Paper 01, 18 e 24 do Banco Central e o Capítulo 06 de Afonso Celso Pastore (2015): Inflação e Crises: O Papel da Moeda. Aponte os diferentes modelos abordados, os sentidos de causalidades destacados no modelo e os argumentos que poderão ser utilizados para concluir suas estimações.
+
+## Questão 2
+
+De acordo com seus argumentos, teóricos e empíricos, selecione modelos críveis para a elaboração e estimações de previsões (MF-L, MF-G, Log-Lin, ARIMA, MQO e VAR) da taxa de juros nominal e real para os próximos 6 meses (MAI, JUN, JUL, AGO, SET, OUT).
+
+-   Selecione a base de dados de 2003-2022-4 (escolha a janela pertinente) e, a partir das informações de conjuntura econômica, estime e aponte o modelo final para analisar as previsões e a trajetória da taxa de juros nominal. Utilize a teoria da Regra de Taylor, reforce os principais impactos dos choques para o período analisado e, por meio da função de resposta a impulsos e da decomposição da variância analise os impactos.
+
+# Procedimentos Preliminares
+
+```{r echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+# Limpar base e baixar pacotes #
+rm(list = ls())
+options(scipen = 999999)
+options(max.print = 100000)
+library('dplyr')
+library('tidyr')
+library('tidyverse')
+library('fBasics')
+library('tseries')
+library('mFilter')
+library('dynlm')
+library('lmtest')
+library('whitestrap')
+library('FinTS')
+library('performance')
+library('report')
+library('urca')
+library('rbcb')
+library('writexl')
+library('quantmod')
+library('forecast')
+library('ipeadatar')
+library('vars')
+library('deflateBR')
+```
+
+# Bases de Dados e Período de Análise
+
+Baixar as bases de dados do SGS Bacen e do Ipeadata.
+
+Todas as séries possuem dados mensais e abrangem o período de janeiro de 2003 a abril de 2023.
+
+```{r}
+# Baixar o PIB Acum 12 meses - valores nominais
+pib_ac12 <- get_series(4382, start_date = '2003-01-01');
+pib_ac12 <- ts(pib_ac12$'4382', start = c(2003,01), end = c(2023,04), frequency = 12);
+pib_ac12
+```
+
+```{r}
+# Baixar IPCA Acum. 12 meses
+ipca_ac12 <- get_series(13522, start_date = '2003-01-01')
+ipca12 <- ts(ipca_ac12$'13522', start = c(2003,01), end = c(2023,04), frequency = 12)
+ipca12
+```
+
+```{r}
+# Baixar Expectativa do IPCA para 12 meses
+exp12m <- ipeadata(code = 'BM12_IPCAEXP1212', language = 'br')
+exp12m["dataf_ano"] <- strftime(exp12m$date, "%Y")
+exp12m <- exp12m %>% filter(dataf_ano >= 2003)
+exp12 <- ts(exp12m$value, start = c(2003,01), end = c(2023,04), frequency = 12)
+exp12
+```
+
+```{r}
+# Índice da taxa de câmbio real efetiva (IPCA) - Jun/1994=100
+CAMBIO_EFETIVO_IDREAL <- get_series(11752,start_date = '2003-01-01')
+cambioR <- ts(CAMBIO_EFETIVO_IDREAL$`11752`, start = c(2003,01), frequency = 12)
+cambioR
+```
+
+```{r}
+# Taxa Selic anualizada
+selic_an <- get_series(4189,start_date = '2003-01-01')
+selic <- ts(selic_an$'4189', start = c(2003,01), end = c(2023,04), frequency = 12)
+selic
+```
+
+```{r}
+# Meta de Inflação
+meta <- get_series(13521,start_date = '2003-01-01')
+meta <- ts(meta$'13521', start = c(2003), frequency = 1)
+meta <- rep(meta, each = 12)
+meta <- ts(meta, start = c(2003,01), end = c(2023,04), frequency = 12)
+meta
+```
+
+```{r}
+# Desvio da Meta de Inflação
+desvio <- exp12 - meta
+desvio
+```
+
+```{r}
+# Deflacionando a série do PIB Nominal para obter o PIB Real
+times <- seq(as.Date("2003/1/1"), by = "month", length.out = 244)
+pibR <- deflate(pib_ac12, nominal_dates = times, real_date = '04/2023', index = 'ipca')
+pibR
+```
+
+```{r}
+# Encontrando o Hiato do Produto pelo Filtro de Hodrick-Prescott
+pib.hp <- hpfilter(na.omit(pibR, type = 'lambda', freq = 14400))
+hiato <- pib.hp$cycle
+hiato
+```
+
+# Análise Gráfica das Variáveis
+
+```{r}
+# Gráfico do PIB Real Acum. 12 meses 
+plot(pibR, col = 'red', main = 'PIB Real - 01.2003 a 04.2023', xlab = 'Período', 
+  ylab = 'Milhões de Reais')
+
+# Gráfico do Hiato do Produto
+plot(hiato, col = 'red', main = 'Hiato do Produto - 01.2003 a 04.2023', xlab = 'Período',
+  ylab = 'Milhões de Reais'); abline(h=0, col = 'blue')
+
+# Gráfico Expectativa IPCA
+plot(exp12, col = 'red', main = 'Expectativa IPCA', xlab = 'Período',
+  ylab = '%')
+
+# Gráfico do IPCA Acum. 12 meses 
+plot(ipca12, col = 'red', main = 'IPCA Acum. 12 meses em relação à Meta', xlab = 'Período',
+  ylab = '%'); lines(meta, col = 'blue'); lines((meta+2), lty = 2); lines((meta-2), lty = 2)
+
+#Gráfico do Desvio da Inflação em relação à meta
+plot(desvio, col = 'red', main = 'Desvio da Meta', xlab = 'Período',
+  ylab = '%'); abline(h = 0, col = 'blue')
+
+# Gráfico do Índice da taxa de câmbio real efetiva (IPCA) - Jun/1994=100
+plot(cambioR, col = 'blue', main = 'Índice da Taxa de Câmbio Real', xlab = 'Período',
+  ylab = 'Índice')
+
+# Gráfico da Taxa Selic Anualizada
+plot(selic, col = 'red', main = 'Taxa Selic Anualizada', xlab = 'Período',
+  ylab = '%')
+```
+
+# Modelagens para Previsão
+
+## Ajustes
+
+### Transformação Logarítima e em Diferença
+
+```{r}
+
+# Transformação em Log
+lhiato <- log(hiato+2*-min(hiato))
+lcambio <- log(cambioR)
+lselic <- log(selic)
+ldesvio <- log(desvio+2*-min(desvio))
+
+# Transformação em 1ª diferença
+hiato_d <- diff(lhiato,1)
+cambio_d <- diff(lcambio,1)
+selic_d <- diff(lselic,1)
+desvio_d <- diff(ldesvio,1)
+
+# Combinando Dados para as modelagens
+dados_tay <- cbind(selic_d, desvio_d, hiato_d, cambio_d)
+plot(dados_tay, col = 'red', main = 'Variáveis para a Regra de Taylor', xlab = 'Período', ylab = 'Diff-Log')
+```
+
+### Janela Pertinente para Previsão
+
+```{r}
+dados_tay_prev <- window(dados_tay, frequency = 12, start = c(2019,10), end = c(2023,04))
+dados_tay_prev
+plot(dados_tay_prev, col = 'red', main = 'Variáveis para a Regra de Taylor', xlab = 'Período', ylab = 'Diff-Log')
+```
+
+### Testes de Raiz Unitária
+
+```{r}
+# Testes de Raiz Unitária - Dickey Fuller
+dfselic <- ur.df(dados_tay_prev[,1], lags = 10, type = 'trend', selectlags = 'AIC'); summary(dfselic)
+dfdesvio <- ur.df(dados_tay_prev[,2], lags = 10, type = 'trend', selectlags = 'AIC'); summary(dfdesvio)
+dfhiato <- ur.df(dados_tay_prev[,3], lags = 10, type = 'trend', selectlags = 'AIC'); summary(dfhiato)
+dfcambio <- ur.df(dados_tay_prev[,4], lags = 10, type = 'trend', selectlags = 'AIC'); summary(dfcambio)
+```
+
+### Causalidade de Granger
+
+```{r}
+grangertest(dados_tay_prev[,1]~dados_tay_prev[,2], order=1)
+grangertest(dados_tay_prev[,1]~dados_tay_prev[,3], order=1)
+grangertest(dados_tay_prev[,1]~dados_tay_prev[,4], order=1)
+grangertest(dados_tay_prev[,2]~dados_tay_prev[,1], order=1)
+grangertest(dados_tay_prev[,2]~dados_tay_prev[,3], order=1)
+grangertest(dados_tay_prev[,2]~dados_tay_prev[,4], order=1)
+grangertest(dados_tay_prev[,3]~dados_tay_prev[,1], order=1)
+grangertest(dados_tay_prev[,3]~dados_tay_prev[,2], order=1)
+grangertest(dados_tay_prev[,3]~dados_tay_prev[,4], order=1)
+grangertest(dados_tay_prev[,4]~dados_tay_prev[,1], order=1)
+grangertest(dados_tay_prev[,4]~dados_tay_prev[,2], order=1)
+grangertest(dados_tay_prev[,4]~dados_tay_prev[,3], order=1)
+```
+
+## VAR - Vetores Autorregressivos
+
+### Escolha da Defasagem
+
+```{r}
+# Escolha da defasagem ótima
+VAR_select <- VARselect(dados_tay_prev, lag.max = 10, type = 'trend')
+VAR_select$selection
+```
+
+### Modelagem do VAR
+
+```{r}
+# Com constante e tendência
+VAR_tay <- VAR(dados_tay_prev, p=2, type = 'trend')
+summary(VAR_tay)
+plot(VAR_tay)
+```
+
+### Diagnóstico
+
+```{r}
+# # Portmanteau Test (autocorrelação residual)
+serial_tay <- serial.test(VAR_tay, lags.pt = 5, 'PT.asymptotic')
+serial_tay
+
+# Teste de Arch  (presença de autocorrelação e heterocedasticidade)
+arch.test(VAR_tay)
+
+# Teste de Normalidade
+normalidade <- normality.test(VAR_tay)
+normalidade
+
+# Teste de Raiz
+raizes <- roots(VAR_tay, modulus = TRUE)
+raizes
+```
+
+### Impulso-Resposta
+
+```{r}
+# Impulso-Resposta
+impulso_VAR_tay <- irf(VAR_tay, n.ahead = 36)
+# Análise Individual (todas as possibilidades)
+plot(irf(VAR_tay, n.ahead = 36, impulse = 'desvio_d', response = 'selic_d', boot = T))
+plot(irf(VAR_tay, n.ahead = 36, impulse = 'hiato_d', response = 'selic_d', boot = T))
+plot(irf(VAR_tay, n.ahead = 36, impulse = 'cambio_d', response = 'selic_d', boot = T))
+```
+
+### Decomposição da Variância
+
+```{r}
+## Decomposição da Variância período completo (2003.1 a 2022.12)
+decomp_VAR_tay <- fevd(VAR_tay, n.ahead = 36)
+decomp_VAR_tay
+plot(decomp_VAR_tay, plot.type=c("single"), col=c("cadetblue", "azure", 'yellow', 'blue'))
+```
+
+### Previsões
+
+```{r}
+# Previsões com VAR
+prev_tay <- predict(VAR_tay, n.ahead = 6)
+prev_tay
+fanchart(prev_tay, names = 'selic_d', main = 'Trajetória e Previsão da Selic', col.y = 'red', plot.type = 'single')
+```
+
+# Comentários sobre a Regra de Taylor
+
+O Modelo da Regra de Taylor é uma importante ferramenta para analisar e compreender a relação entre a taxa de juros, a inflação e a atividade econômica. Desenvolvido por John Taylor na década de 1990, esse modelo fornece uma estrutura analítica que permite entender como os bancos centrais podem ajustar a taxa de juros de acordo com as condições macroeconômicas. Neste texto dissertativo, exploraremos os diferentes modelos abordados nos Working Papers 01, 18 e 24 do Banco Central, bem como no Capítulo 06 do livro "Inflação e Crises: O Papel da Moeda" de Afonso Celso Pastore. Além disso, destacaremos os sentidos de causalidade propostos por esses modelos e os argumentos que podem ser utilizados para concluir as estimações econométricas.
+
+A crise de 1998/9 levou ao abandono da relação fixa da taxa cambial e este passou a flutuar e um novo mecanismo para controle inflacionário passou a ser executado pelo Banco Central. O Decreto nº 3.088/99 regrou os pontos chaves do regime de metas de inflação, sendo que foi definido pelo CMN o IPCA como o índice da meta. Assim, o Conselho Monetário passou a programar a meta para os próximos dois exercícios e uma banda de flutuação de + ou -- 2% em torno do centro da meta.
+
+Os trabalhos do Banco Central, em especial os Working Papers 01, 18 e 24, apresentam diferentes abordagens do Modelo da Regra de Taylor. Esses estudos utilizam diversas variáveis macroeconômicas, como a taxa de inflação, o hiato do produto e a taxa de juros de equilíbrio, para estimar os parâmetros que governam a reação dos bancos centrais às condições econômicas. O objetivo é entender como as autoridades monetárias tomam suas decisões de política monetária.
+
+No Working Paper 01, são propostas diferentes especificações do modelo, considerando a incorporação de variáveis como o crescimento do crédito e a taxa de câmbio. Essa abordagem busca capturar a influência de fatores externos e de condições financeiras na política monetária. Já o Working Paper 18 estudou o mecanismo de transmissão da política monetária. Por fim, o Working Paper 24 explora a possibilidade de mudanças estruturais na economia afetarem a regra de política monetária.
+
+No Capítulo 06 do livro de Afonso Celso Pastore, o autor discute a causalidade entre inflação e taxa de juros no contexto brasileiro. Ele argumenta que, no passado, o Brasil experimentou um regime de alta inflação, no qual a inflação afetava diretamente a taxa de juros, devido à indexação da economia. No entanto, após o Plano Real e a implementação de medidas de estabilização, a relação entre inflação e taxa de juros se tornou mais complexa. Pastore defende a ideia de que, atualmente, é a taxa de juros que influencia a inflação no Brasil, por meio de mecanismos de transmissão monetária mais eficientes.
+
+Algumas conclusões macroeconômicas da época e expostas no Working Paper 001 do Bacen. Juros afetam consumo de bens duráveis e investimentos; juros nominais afetam o câmbio nominal e a inflação "importada". Por meio da modelagem de séries temporais e de vetores autorregressivos buscou-se três finalidades: previsão alternativa de curto prazo para taxa de inflação, permitir a estimação da taxa de juros real, simular choques específicos no IPCA.
+
+Os resultados dos estudos no Working Paper 18 demonstraram que a taxa de juros afeta o hiato do produto com um trimestre de defasagem e a produção está positivamente relacionada à inflação com apenas uma defasagem. A desvalorização da taxa de câmbio nominal também tem um efeito contemporâneo sobre a inflação. Concluiu também que regras do tipo Taylor, podem ter um desempenho razoável se o Banco Central tiver uma forte aversão à variância da inflação e reagir de forma mais intensa ao hiato do produto e a desvios da inflação do que a regra tradicional de Taylor sugere.
+
+Por sua vez, o Working Paper 24 demonstrou como a política monetária reagiu a diferentes choques econômicos e como estes se propagaram, principalmente pelo lado da oferta na economia. Os resultados mostraram que o Banco Central deve adotar uma abordagem restritiva diante de choques de demanda agregada, porém, ser parcialmente acomodatício em resposta a choques de oferta e financeiros. Isso implica em aumentar as taxas de juros nominais enquanto permite que as taxas de juros reais caiam, resultando em uma redução gradual da inflação. Esse padrão foi observado em episódios recentes no Brasil, em que o Banco Central manteve as taxas de juros nominais acima do equilíbrio de longo prazo durante choques de oferta e financeiros, permitindo a queda das taxas de juros reais. Esse padrão, corroborado pelas funções de resposta de impulso. Após a estabilização da inflação, as taxas de juros reais aumentaram novamente e o Banco Central retomou a redução das taxas de juros.
+
+O Modelo da Regra de Taylor e suas diferentes abordagens, presentes nos Working Papers 01, 18 e 24 do Banco Central, assim como as conclusões de Pastore, permitem uma compreensão mais aprofundada da relação entre taxa de juros e inflação. Esses estudos apresentam modelos econométricos que consideram variáveis macroeconômicas relevantes e destacam os sentidos de causalidade entre as variáveis em questão. As estimativas econométricas obtidas a partir desses modelos oferecem subsídios importantes para a formulação de políticas monetárias eficientes, ao permitirem a análise de diferentes cenários e suas consequências na economia.
+
+# Comentários sobre a Estimação da Previsão
+
+Para estimação do modelo de Regra de Taylor, a fim de obter a taxa de juros nominal, trabalhamos com as seguintes variáveis: Taxa Selic Anualizada, Desvio da Meta de Inflação, Hiato do Produto e Câmbio Real/Dólar. Todas as bases de dados são mensais e foram obtidas pelos API's disponíveis do SGS do Bacen e do Ipeadata, por meio de pacotes estatísticos adequados. Considerando que foi disponibilizado recentemente o índice do câmbio para a competência abril/2023, ampliamos a base para incluí-la e buscamos estimar a previsão para os meses de maio a outubro deste ano.
+
+Para o cálculo do desvio da meta de inflação foi utilizado a Expectativa do IPCA para 12 meses, por demonstrar um comportamento, graficamente, sem ciclos, como apresentava o mesmo índice para 6 meses, e por apresentar boa aderência ao IPCA observado. O Hiato do Produto foi obtido por meio do filtro de Hodrick-Prescott. Para o câmbio foi utilizado o Índice da taxa de câmbio real efetiva (IPCA) - Jun/1994=100.
+
+Uma breve análise gráfica das variáveis utilizadas aponta a manutenção da taxa selic nos últimos 8 meses, o câmbio real em patamares mais baixos do que aqueles observados nos anos de 2020 a 2022, um nível de atividade econômica ainda acima do produto potencial, mas apresentando uma tendência de queda nos quatro meses de 2023, e uma expectativa do IPCA ainda acima do centro da meta, mas também com tendência de queda no início deste ano.
+
+Foi realizada a logaritmização de todas as variáveis, bem como efetuada a primeira diferença, a fim de trabalharmos com séries estacionárias, requisito fundamental para a estimação do VAR. Na sequência buscamos uma janela adequada a fim de que todas as variáveis fossem estacionárias a 5% de significância no Teste de Dickey-Fuller Ampliado (com constante e tendência, com 10 defasagens, por meio do critério AIC).
+
+O teste de causalidade foi realizado com os pares de todas as variáveis, contudo, não se verificou significância a 5% de rejeição da hipótese nula de não-causalidade. Destaca-se que mesmo com a ausência de causalidade entre as variáveis os choques foram transmitidos para todo o sistema.
+
+A seleção das defasagens do modelo VAR estimou em 8 defasagens para todos os critérios e 9 para o erro final de previsão. Ainda assim, testamos as hipóteses do VAR(1) a VAR(9) e a modelagem que trouxe o melhor diagnóstico foi o VAR(2).
+
+Para todas as simulações, foram realizados os diagnósticos do modelo. Para o VAR(2) os resultados foram estatisticamente positivos para ausência de autocorrelação residual e heterocedasticidade pelo Portmanteau Test e Teste de ARCH. Aplicado o teste de normalidade teve resultados que sugerem que os resíduos do modelo VAR estimado possuem uma distribuição que se aproxima da normalidade, com baixa assimetria e curtose, indicando que não há violações significativas da suposição de normalidade dos resíduos. O teste de estabilidade do modelo em relação aos seus próprios autovalores, também foi positivo, indicando que o modelo é estável e os choques aleatórios tendem a se dissipar ao longo do tempo, não causando explosões ou instabilidades persistentes.
+
+As respostas da Selic aos impulsos em cada uma das variáveis apresentaram-se adequados à teoria. Um impacto no desvio da meta de inflação tem resposta positiva quase imediata na Selic e convergência lenta até um pouco mais do 30º mês. A resposta da Selic ao choque no hiato também é percebida nos primeiros meses, contudo tem convergência mais rápida, próxima do 5º mês, podendo oscilar negativamente por certo período. O choque no câmbio também gera resposta positiva da Selic, que decai rapidamente no 4º ou 5º mês, convergindo finalmente após o 20º período.
+
+Os resultados da decomposição do erro de previsão da variância da Selic mostram que no tempo contemporâneo esta recebe influência, em sua variância, somente de sua própria série. Após 10 meses, a participação aproximada do Desvio e do Câmbio apresentam, respectivamente, 13% e 4%, proporção que é observada até o 36º mês.
+
+A decomposição relativa ao Desvio aponta que já no tempo contemporâneo, próximo de 7% é afetado pela Selic, mas sem participação do Hiato e do Câmbio, que passam a ter influência no 2º mês, constante até o 36º, de 5,5% e 2%, na ordem.
+
+O resultado relativo à decomposição do erro do Hiato demonstrou contribuição de pouco mais de 19% de influência da Selic e do Desvio no tempo contemporâneo, sem participação do Câmbio. No 36º mês observou-se influência da Selic, Desvio e Câmbio, respectivamente de 9%, 13% e 2%.
+
+Por fim, a decomposição do erro de previsão da variância do Câmbio apresentou influência relevante desde o tempo contemporâneo do Desvio da meta, aproximadamente, 13,5%. Após 36 meses, a influência da Selic, Desvio e Hiato são, na ordem, de 9,2%, 15,3% e 9,6%.
+
+Os resultados apresentados são as previsões de um modelo de previsão VAR(2) para a taxa SELIC em primeira diferença do logaritmo.
+
+Pontualmente, há uma previsão de queda aproximada de 3% na taxa Selic para o mês de maio, seguindo para uma taxa anualizada de 13,25%, mantendo essa taxa nos meses de junho e julho, contudo com possibilidade de subida nos meses de agosto a outubro.
+
+Entretanto, a previsão gerada pelo modelo trouxe projeções com alto intervalo de confiança, mostrando certa incerteza em torno das previsões. É importante ressaltar que essa interpretação depende do contexto e da conjuntura macroeconômica.
+
+# Referências Bibliográficas
+
+Banco Central do Brasil. Working Paper Series 01. Disponível em: <https://www.bcb.gov.br/content/publicacoes/WorkingPaperSeries/wps01.pdf>. Acesso em: 16 jun. 2023.
+
+Banco Central do Brasil. Inflation Targeting in Brazil: Direct and Indirect Effects on Financial Market. Disponível em: <https://www.bcb.gov.br/content/publicacoes/WorkingPaperSeries/wps18.pdf>. Acesso em: 16 jun 2023
+
+Banco Central do Brasil. Inflation Targeting in Brazil: Shocks, Backward-Looking Prices, and IMF Conditionality. Disponível em: <https://www.bcb.gov.br/content/publicacoes/WorkingPaperSeries/wps24.pdf>. Acesso em: 16 jun 2023
+
+BARROS, Anna C.; MATTOS, Daiane Marcolino de; OLIVEIRA, Ingrid Christyne Luquett de; et al. Análise de Séries Temporais em R: Curso Introdutório. Rio de Janeiro : Elsevier : FGV IBRE, 2018. E-book. ISBN 9788595154902. Disponível em: <https://integrada.minhabiblioteca.com.br/#/books/9788595154902/>. Acesso em: 16 jun. 2023.
+
+GUJARATI, Damodar N.; PORTER, Dawn C. Econometria básica. Porto Alegre-RS: AMGH, 2011. E-book. ISBN 9788580550511. Disponível em: <https://integrada.minhabiblioteca.com.br/#/books/9788580550511/>. Acesso em: 16 jun. 2023.
